@@ -10,12 +10,15 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+
 	"time"
 
 	"golang.org/x/net/context"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/calendar/v3"
+
+	tablewriter "github.com/olekukonko/tablewriter"
 )
 
 // getClient uses a Context and Config to retrieve a Token
@@ -221,7 +224,7 @@ func main() {
 	for _, i := range calendars.Items {
 		if contains(i.Summary, busySummaries) {
 			busyIDs = append(busyIDs, i.Id)
-			fmt.Println("Blocking with Calendar: ", i.Summary)
+			// fmt.Println("Blocking with Calendar: ", i.Summary)
 		}
 
 	}
@@ -248,7 +251,7 @@ func main() {
 
 			for _, i := range events.Items {
 				busyEvents = append(busyEvents, i)
-				fmt.Println("Upcoming: ", i.Start.DateTime, i.End.DateTime, i.Summary)
+				// fmt.Println("Upcoming: ", i.Start.DateTime, i.End.DateTime, i.Summary)
 			}
 		}
 	}
@@ -284,7 +287,11 @@ func main() {
 	}
 	freeRanges = longRanges
 
+	table := tablewriter.NewWriter(os.Stdout)
+	table.SetHeader([]string{"Day", "Start", "Stop"})
+
 	for _, r := range freeRanges {
-		fmt.Println(r.String())
+		table.Append([]string{r.Start().Format("Mon"), r.Start().Format("3:04"), r.End().Format("3:04")})
 	}
+	table.Render()
 }
