@@ -102,13 +102,13 @@ func nextWorkDay(now time.Time) (start, end time.Time) {
 	}
 
 	// 10am or now, whenever is later
-	start = time.Date(next.Year(), next.Month(), next.Day(), 10, 0, 0, 0, now.Location())
-	if start.After(now) {
-		start = now
+	start = time.Date(next.Year(), next.Month(), next.Day(), 10, 0, 0, 0, next.Location())
+	if start.After(next) {
+		start = next
 	}
 
 	// 6pm
-	end = time.Date(next.Year(), next.Month(), next.Day(), 18, 0, 0, 0, now.Location())
+	end = time.Date(next.Year(), next.Month(), next.Day(), 18, 0, 0, 0, next.Location())
 	return start, end
 }
 
@@ -122,32 +122,56 @@ func contains(s string, slice []string) bool {
 }
 
 type Range struct {
-	start    time.Time
-	duration time.Duration
+	start time.Time
+	end   time.Time
 }
 
 func (r *Range) Start() time.Time {
-	return r.Start()
+	return r.start
 }
 
 func (r *Range) Duration() time.Duration {
-	return r.duration
+	return r.end.Sub(r.start)
 }
 
 func (r *Range) End() time.Time {
-	return r.Start().Add(r.Duration())
+	return r.end
+}
+
+func (r *Range) String() string {
+	fmt := "2 Mon 3:04"
+	return r.Start().Format(fmt) + " - " + r.End().Format(fmt)
 }
 
 func (r *Range) split(start, end time.Time) []Range {
 
-	// don't split if range starts after splitter ends
-	if r.Start().After(end) {
+	// fmt.Println("Splitting ", r.String())
+	// fmt.Println("  with ", (&Range{start, end}).String())
+
+	ret := []Range{}
+
+	// don't split if r starts after splitter ends
+	if r.Start().After(end) || r.Start().Equal(end) {
 		return []Range{*r}
-	} else if start.After(r.End()) { // don't split if splitter starts after range ends
+	} else if r.End().Before(start) || r.End().Equal(start) { // don't split if splitter starts after r ends
 		return []Range{*r}
 	}
 
-	return []Range{}
+	// First range if Splitter starts during r
+	if start.After(r.Start()) && start.Before(r.End()) {
+		newRange := Range{r.Start(), start}
+		// fmt.Println("  +", newRange.String())
+		ret = append(ret, newRange)
+	}
+
+	// Second range if splitter ends during r
+	if end.After(r.Start()) && end.Before(r.End()) {
+		newRange := Range{end, r.End()}
+		// fmt.Println("  +", newRange.String())
+		ret = append(ret, newRange)
+	}
+
+	return ret
 }
 
 const (
@@ -196,7 +220,7 @@ func main() {
 	freeRanges := []Range{}
 	for i := 0; i < 3; i++ {
 		dayStart, dayStop := nextWorkDay(now.AddDate(0, 0, i))
-		freeRanges = append(freeRanges, Range{dayStart, dayStop.Sub(dayStart)})
+		freeRanges = append(freeRanges, Range{dayStart, dayStop})
 
 		for _, busyID := range busyIDs {
 			events, err := srv.Events.List(busyID).
@@ -213,26 +237,9 @@ func main() {
 
 			for _, i := range events.Items {
 				busyEvents = append(busyEvents, i)
-				fmt.Println("Blocked by", i.Summary)
+				fmt.Println("Upcoming: ", i.Start.DateTime, i.End.DateTime, i.Summary)
 			}
 		}
-
-		// fmt.Println("Upcoming events:")
-		// if len(events.Items) > 0 {
-		// 	for _, i := range events.Items {
-		// 		var when string
-		// 		// If the DateTime is an empty string the Event is an all-day Event.
-		// 		// So only Date is available.
-		// 		if i.Start.DateTime != "" {
-		// 			when = i.Start.DateTime
-		// 		} else {
-		// 			when = i.Start.Date
-		// 		}
-		// 		fmt.Printf("%s (%s)\n", i.Summary, when)
-		// 	}
-		// } else {
-		// 	fmt.Printf("No upcoming events found.\n")
-		// }
 	}
 
 	for _, event := range busyEvents {
@@ -257,8 +264,16 @@ func main() {
 		}
 	}
 
+	// Prune short ranges
+	longRanges := []Range{}
 	for _, r := range freeRanges {
-		fmt.Println(r)
+		if r.Duration().Minutes() >= 30 {
+			longRanges = append(longRanges, r)
+		}
 	}
+	freeRanges = longRanges
 
+	for _, r := range freeRanges {
+		fmt.Println(r.String())
+	}
 }
