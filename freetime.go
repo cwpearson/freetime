@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"sync"
 
 	"time"
 
@@ -195,6 +196,54 @@ const (
 	format = "2017-03-15T16:00:00-05:00"
 )
 
+func getItems(srv *calendar.Service, calendarIDs []string, timeRange Range) ([]*calendar.Event, error) {
+	items := []*calendar.Event{}
+
+	errs := []error{}
+	var itemsLock, errsLock sync.Mutex
+	var wg sync.WaitGroup
+
+	// Get all calendars in parallel
+	for _, calendarID := range calendarIDs {
+		wg.Add(1)
+		go func(id string) {
+			defer wg.Done()
+			events, err := srv.Events.List(id).
+				ShowDeleted(false).
+				SingleEvents(true).
+				TimeMin(timeRange.Start().Format(time.RFC3339)).
+				TimeMax(timeRange.End().Format(time.RFC3339)).
+				OrderBy("startTime").
+				Do()
+
+			// Record error, if any
+			errsLock.Lock()
+			errs = append(errs, err)
+			errsLock.Unlock()
+
+			// record events if no error
+			if err == nil {
+				itemsLock.Lock()
+				for _, i := range events.Items {
+
+					items = append(items, i)
+				}
+				itemsLock.Unlock()
+			}
+		}(calendarID)
+	}
+
+	wg.Wait()
+
+	for _, err := range errs {
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return items, nil
+}
+
 func main() {
 	ctx := context.Background()
 
@@ -240,28 +289,15 @@ func main() {
 		nextDay := nextWorkDay(now.AddDate(0, 0, i))
 		nextDay = nextDay.After(now) // don't look before now
 
-		// fmt.Println(nextDay.String())
-
 		freeRanges = append(freeRanges, nextDay)
+		dayEvents, err := getItems(srv, busyIDs, nextDay)
 
-		for _, busyID := range busyIDs {
-			events, err := srv.Events.List(busyID).
-				ShowDeleted(false).
-				SingleEvents(true).
-				TimeMin(nextDay.Start().Format(time.RFC3339)).
-				TimeMax(nextDay.End().Format(time.RFC3339)).
-				OrderBy("startTime").
-				Do()
+		if err != nil {
+			log.Fatal(err)
+		}
 
-			if err != nil {
-				log.Fatalf("Unable to retrieve user's events. %v", err)
-			}
-
-			for _, i := range events.Items {
-				busyEvents = append(busyEvents, i)
-				// fmt.Println("Upcoming: ", i.Start.DateTime, i.End.DateTime, i.Summary)
-			}
-			// fmt.Println("got ", len(busyEvents))
+		for _, i := range dayEvents {
+			busyEvents = append(busyEvents, i)
 		}
 	}
 
