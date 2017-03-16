@@ -90,25 +90,36 @@ func saveToken(file string, token *oauth2.Token) {
 	json.NewEncoder(f).Encode(token)
 }
 
+// Gets the next workday after or including now
 func nextWorkDay(now time.Time) (start, end time.Time) {
-	var next time.Time
+	var nextStart time.Time
 
-	if now.Weekday() == time.Saturday {
-		next = now.AddDate(0, 0, 2)
-	} else if now.Weekday() == time.Sunday {
-		next = now.AddDate(0, 0, 1)
+	// if it's after 6pm, advance to tomorrow at 10am
+	nowAtSix := time.Date(now.Year(), now.Month(), now.Day(), 18, 0, 0, 0, now.Location())
+	if now.After(nowAtSix) || now.Equal(nowAtSix) {
+		nextStart = now.AddDate(0, 0, 1)                                                                               // tomorrow
+		nextStart = time.Date(nextStart.Year(), nextStart.Month(), nextStart.Day(), 10, 0, 0, 0, nextStart.Location()) // 10am
 	} else {
-		next = now
+		nextStart = now
 	}
 
-	// 10am or now, whenever is later
-	start = time.Date(next.Year(), next.Month(), next.Day(), 10, 0, 0, 0, next.Location())
-	if start.After(next) {
-		start = next
+	// If it's the weekend, advance to the next weekday
+	if nextStart.Weekday() == time.Saturday {
+		nextStart = nextStart.AddDate(0, 0, 2)
+	} else if nextStart.Weekday() == time.Sunday {
+		nextStart = nextStart.AddDate(0, 0, 1)
 	}
 
-	// 6pm
-	end = time.Date(next.Year(), next.Month(), next.Day(), 18, 0, 0, 0, next.Location())
+	// If it's before 10am, advance to 10am
+	nextAtTen := time.Date(nextStart.Year(), nextStart.Month(), nextStart.Day(), 10, 0, 0, 0, nextStart.Location())
+	if nextAtTen.After(nextStart) {
+		start = nextAtTen
+	} else {
+		start = nextStart
+	}
+
+	// End at 6pm the same day
+	end = time.Date(nextStart.Year(), nextStart.Month(), nextStart.Day(), 18, 0, 0, 0, nextStart.Location())
 	return start, end
 }
 
@@ -205,7 +216,7 @@ func main() {
 	}
 
 	// find IDs of all calendars that cause me to be busy
-	busySummaries := []string{"UIUC", "Personal", "YMCA"}
+	busySummaries := []string{"UIUC", "Social", "YMCA"}
 	busyIDs := []string{}
 	for _, i := range calendars.Items {
 		if contains(i.Summary, busySummaries) {
