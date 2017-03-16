@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
-	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -18,6 +17,7 @@ import (
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/calendar/v3"
 
+	log "github.com/Sirupsen/logrus"
 	tablewriter "github.com/olekukonko/tablewriter"
 )
 
@@ -93,39 +93,6 @@ func saveToken(file string, token *oauth2.Token) {
 	json.NewEncoder(f).Encode(token)
 }
 
-// Gets the next workday after or including now
-func nextWorkDay(now time.Time) (start, end time.Time) {
-	var nextStart time.Time
-
-	// if it's after 6pm, advance to tomorrow at 10am
-	nowAtSix := time.Date(now.Year(), now.Month(), now.Day(), 18, 0, 0, 0, now.Location())
-	if now.After(nowAtSix) || now.Equal(nowAtSix) {
-		nextStart = now.AddDate(0, 0, 1)                                                                               // tomorrow
-		nextStart = time.Date(nextStart.Year(), nextStart.Month(), nextStart.Day(), 10, 0, 0, 0, nextStart.Location()) // 10am
-	} else {
-		nextStart = now
-	}
-
-	// If it's the weekend, advance to the next weekday
-	if nextStart.Weekday() == time.Saturday {
-		nextStart = nextStart.AddDate(0, 0, 2)
-	} else if nextStart.Weekday() == time.Sunday {
-		nextStart = nextStart.AddDate(0, 0, 1)
-	}
-
-	// If it's before 10am, advance to 10am
-	nextAtTen := time.Date(nextStart.Year(), nextStart.Month(), nextStart.Day(), 10, 0, 0, 0, nextStart.Location())
-	if nextAtTen.After(nextStart) {
-		start = nextAtTen
-	} else {
-		start = nextStart
-	}
-
-	// End at 6pm the same day
-	end = time.Date(nextStart.Year(), nextStart.Month(), nextStart.Day(), 18, 0, 0, 0, nextStart.Location())
-	return start, end
-}
-
 func contains(s string, slice []string) bool {
 	for _, i := range slice {
 		if i == s {
@@ -188,6 +155,42 @@ func (r *Range) split(start, end time.Time) []Range {
 	return ret
 }
 
+func (r *Range) After(t time.Time) Range {
+	if t.After(r.End()) {
+		return Range{r.End(), r.End()}
+	} else if t.Before(r.Start()) {
+		return *r
+	} else {
+		return Range{t, r.End()}
+	}
+}
+
+// Gets the workday after or including now
+func nextWorkDay(now time.Time) Range {
+	var nextStart time.Time
+
+	// if it's after 6pm, advance to tomorrow at 10am
+	// otherwise, start at 10am today
+	nowAtSix := time.Date(now.Year(), now.Month(), now.Day(), 18, 0, 0, 0, now.Location())
+	if now.After(nowAtSix) || now.Equal(nowAtSix) {
+		nextStart = now.AddDate(0, 0, 1)                                                                               // tomorrow
+		nextStart = time.Date(nextStart.Year(), nextStart.Month(), nextStart.Day(), 10, 0, 0, 0, nextStart.Location()) // 10am
+	} else {
+		nextStart = time.Date(now.Year(), now.Month(), now.Day(), 10, 0, 0, 0, now.Location()) // 10am
+	}
+
+	// If it's the weekend, advance to the next weekday
+	if nextStart.Weekday() == time.Saturday {
+		nextStart = nextStart.AddDate(0, 0, 2)
+	} else if nextStart.Weekday() == time.Sunday {
+		nextStart = nextStart.AddDate(0, 0, 1)
+	}
+
+	// End at 6pm the same day
+	end := time.Date(nextStart.Year(), nextStart.Month(), nextStart.Day(), 18, 0, 0, 0, nextStart.Location())
+	return Range{nextStart, end}
+}
+
 const (
 	format = "2017-03-15T16:00:00-05:00"
 )
@@ -195,7 +198,8 @@ const (
 func main() {
 	ctx := context.Background()
 
-	b, err := ioutil.ReadFile("client_secret.json")
+	credPath := filepath.Join(os.Getenv("HOME"), ".credentials", "freetime_secret.json")
+	b, err := ioutil.ReadFile(credPath)
 	if err != nil {
 		log.Fatalf("Unable to read client secret file: %v", err)
 	}
@@ -224,7 +228,7 @@ func main() {
 	for _, i := range calendars.Items {
 		if contains(i.Summary, busySummaries) {
 			busyIDs = append(busyIDs, i.Id)
-			// fmt.Println("Blocking with Calendar: ", i.Summary)
+			// fmt.Println("Blocking with Calendar:", i.Summary)
 		}
 
 	}
@@ -233,15 +237,19 @@ func main() {
 	busyEvents := []*calendar.Event{}
 	freeRanges := []Range{}
 	for i := 0; i < 3; i++ {
-		dayStart, dayStop := nextWorkDay(now.AddDate(0, 0, i))
-		freeRanges = append(freeRanges, Range{dayStart, dayStop})
+		nextDay := nextWorkDay(now.AddDate(0, 0, i))
+		nextDay = nextDay.After(now) // don't look before now
+
+		// fmt.Println(nextDay.String())
+
+		freeRanges = append(freeRanges, nextDay)
 
 		for _, busyID := range busyIDs {
 			events, err := srv.Events.List(busyID).
 				ShowDeleted(false).
 				SingleEvents(true).
-				TimeMin(dayStart.Format(time.RFC3339)).
-				TimeMax(dayStop.Format(time.RFC3339)).
+				TimeMin(nextDay.Start().Format(time.RFC3339)).
+				TimeMax(nextDay.End().Format(time.RFC3339)).
 				OrderBy("startTime").
 				Do()
 
@@ -253,6 +261,7 @@ func main() {
 				busyEvents = append(busyEvents, i)
 				// fmt.Println("Upcoming: ", i.Start.DateTime, i.End.DateTime, i.Summary)
 			}
+			// fmt.Println("got ", len(busyEvents))
 		}
 	}
 
