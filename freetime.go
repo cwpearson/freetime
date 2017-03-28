@@ -285,7 +285,7 @@ func main() {
 	now := time.Now()
 	busyEvents := []*calendar.Event{}
 	freeRanges := []Range{}
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 4; i++ { // today and the next 3 days
 		nextDay := nextWorkDay(now.AddDate(0, 0, i))
 		nextDay = nextDay.After(now) // don't look before now
 
